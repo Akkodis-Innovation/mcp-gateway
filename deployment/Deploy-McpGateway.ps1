@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     This script performs a two-step deployment:
-    1. Deploys Azure infrastructure using Bicep (AKS, ACR, Cosmos DB, etc.)
+    1. Deploys Azure infrastructure using Bicep (AKS, ACR, DocumentDB, etc.)
     2. Configures Kubernetes resources on the deployed AKS cluster
 
     The script supports both full deployment and infrastructure-only deployment.
@@ -23,7 +23,7 @@
     The Azure region for resource deployment. Defaults to 'westus3'.
 
 .PARAMETER EnablePrivateEndpoints
-    Enable private endpoints for Azure resources (ACR, Cosmos DB). When enabled, resources will only be accessible within the VNet.
+    Enable private endpoints for Azure resources (ACR, DocumentDB). When enabled, resources will only be accessible within the VNet.
 
 .EXAMPLE
     .\Deploy-McpGateway.ps1 -ResourceGroupName "rg-mcpgateway-dev" -ClientId "00000000-0000-0000-0000-000000000000"
@@ -192,7 +192,7 @@ function Start-Deployment {
     Write-ColorOutput "========================================" -Type Info
     Write-ColorOutput "AKS Cluster Name: $($outputs.aksName.value)" -Type Info
     Write-ColorOutput "ACR Name: $($outputs.acrName.value)" -Type Info
-    Write-ColorOutput "Cosmos DB Account: $($outputs.cosmosDbAccountName.value)" -Type Info
+    Write-ColorOutput "DocumentDB Account: $($outputs.cosmosDbAccountName.value)" -Type Info
     Write-ColorOutput "Public FQDN: $($outputs.publicIpFqdn.value)" -Type Info
     Write-ColorOutput "Resource Label: $($outputs.resourceLabel.value)" -Type Info
     Write-ColorOutput "========================================`n" -Type Info

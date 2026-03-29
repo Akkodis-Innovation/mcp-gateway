@@ -1,11 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using Azure.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.Azure.Cosmos;
-using Microsoft.Azure.Cosmos.Fluent;
 using Microsoft.Identity.Web;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
@@ -15,11 +12,9 @@ using Microsoft.McpGateway.Service.Authentication;
 using Microsoft.McpGateway.Service.Routing;
 using Microsoft.McpGateway.Service.Session;
 using ModelContextProtocol.AspNetCore.Authentication;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using MongoDB.Driver;
 
 var builder = WebApplication.CreateBuilder(args);
-var credential = new DefaultAzureCredential();
 
 builder.Services.AddApplicationInsightsTelemetry();
 builder.Services.AddLogging();
@@ -29,21 +24,39 @@ builder.Services.AddSingleton<IAdapterSessionStore, DistributedMemorySessionStor
 builder.Services.AddSingleton<IServiceNodeInfoProvider, AdapterKubernetesNodeInfoProvider>();
 builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandler>();
 
+var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConnection;
+    options.InstanceName = "mcpgateway:";
+});
+
+var mongoConfig = builder.Configuration.GetSection("MongoSettings");
+var mongoConnectionString = mongoConfig["ConnectionString"] ?? "mongodb://localhost:27017";
+var mongoDatabaseName = mongoConfig["DatabaseName"] ?? "McpGatewayDb";
+var adapterCollectionName = mongoConfig["AdapterCollectionName"] ?? "adapters";
+var toolCollectionName = mongoConfig["ToolCollectionName"] ?? "tools";
+
+builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoConnectionString));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoDatabaseName));
+
+builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<MongoAdapterResourceStore>>();
+    return new MongoAdapterResourceStore(sp.GetRequiredService<IMongoDatabase>(), adapterCollectionName, logger);
+});
+
+builder.Services.AddSingleton<IToolResourceStore>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<MongoToolResourceStore>>();
+    return new MongoToolResourceStore(sp.GetRequiredService<IMongoDatabase>(), toolCollectionName, logger);
+});
+
 if (builder.Environment.IsDevelopment())
 {
     builder.Services
         .AddAuthentication(DevelopmentAuthenticationHandler.SchemeName)
         .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(DevelopmentAuthenticationHandler.SchemeName, null);
-
-    var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
-    builder.Services.AddStackExchangeRedisCache(options =>
-    {
-        options.Configuration = redisConnection;
-        options.InstanceName = "mcpgateway:";
-    });
-
-    builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
-    builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
 
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
@@ -69,39 +82,6 @@ else
         };
     })
     .AddMicrosoftIdentityWebApi(azureAdConfig);
-
-    // Create CosmosClient with credential-based authentication
-    var cosmosConfig = builder.Configuration.GetSection("CosmosSettings");
-    var cosmosClient = new CosmosClient(
-        cosmosConfig["AccountEndpoint"], 
-        credential, 
-        new CosmosClientOptions
-        {
-            Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
-            {
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-            })
-        });
-
-    builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
-    {
-        var logger = sp.GetRequiredService<ILogger<CosmosAdapterResourceStore>>();
-        return new CosmosAdapterResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AdapterContainer", logger);
-    });
-
-    builder.Services.AddSingleton<IToolResourceStore>(sp =>
-    {
-        var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
-        return new CosmosToolResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "ToolContainer", logger);
-    });
-    
-    builder.Services.AddCosmosCache(options =>
-    {
-        options.ContainerName = "CacheContainer";
-        options.DatabaseName = cosmosConfig["DatabaseName"]!;
-        options.CreateIfNotExists = true;
-        options.ClientBuilder = new CosmosClientBuilder(cosmosConfig["AccountEndpoint"], credential);
-    });
 }
 
 builder.Services.AddSingleton<IKubeClientWrapper>(c =>

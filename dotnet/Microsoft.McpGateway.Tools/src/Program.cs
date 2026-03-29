@@ -1,16 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using Azure.Identity;
-using Microsoft.Azure.Cosmos;
-using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Management.Authorization;
+using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Tools.Contracts;
 using Microsoft.McpGateway.Tools.Services;
+using MongoDB.Driver;
 using System.Linq;
 using System.Security.Claims;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,45 +19,24 @@ builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 // Add HttpClient for tool execution
 builder.Services.AddHttpClient();
 
-// Configure tool resource store and tool definition provider
+var mongoConfig = builder.Configuration.GetSection("MongoSettings");
+var mongoConnectionString = mongoConfig["ConnectionString"] ?? "mongodb://localhost:27017";
+var mongoDatabaseName = mongoConfig["DatabaseName"] ?? "McpGatewayDb";
+var toolCollectionName = mongoConfig["ToolCollectionName"] ?? "tools";
+
+builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoConnectionString));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoDatabaseName));
+
+builder.Services.AddSingleton<IToolResourceStore>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<MongoToolResourceStore>>();
+    return new MongoToolResourceStore(sp.GetRequiredService<IMongoDatabase>(), toolCollectionName, logger);
+});
+
 if (builder.Environment.IsDevelopment())
 {
-    var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
-    builder.Services.AddStackExchangeRedisCache(options =>
-    {
-        options.Configuration = redisConnection;
-        options.InstanceName = "mcpgateway:";
-    });
-    
-    // Use Redis-backed store that can be shared with the gateway service
-    builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
-    
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
-}
-else
-{
-    // In production, use Cosmos DB store
-    var config = builder.Configuration.GetSection("CosmosSettings");
-    var credential = new DefaultAzureCredential();
-    var cosmosClient = new CosmosClient(config["AccountEndpoint"], credential, new CosmosClientOptions
-    {
-        Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
-        {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        })
-    });
-
-    // Register IToolResourceStore
-    builder.Services.AddSingleton<IToolResourceStore>(sp =>
-    {
-        var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
-        return new CosmosToolResourceStore(
-            cosmosClient,
-            config["DatabaseName"]!,
-            "ToolContainer",
-            logger);
-    });
 }
 
 // Register IToolDefinitionProvider using the store

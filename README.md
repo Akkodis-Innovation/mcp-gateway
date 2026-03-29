@@ -415,7 +415,7 @@ The deployment will:
    | Resource Name                 | Resource Type               |
    |-------------------------------|-----------------------------|
    | mgreg\<resourceLabel>         | Container Registry          |
-   | mg-storage-\<resourceLabel>   | Azure Cosmos DB Account     |
+   | mg-storage-\<resourceLabel>   | Azure DocumentDB (MongoDB API) Account |
    | mg-aag-\<resourceLabel>       | Application Gateway         |
    | mg-ai-\<resourceLabel>        | Application Insights        |
    | mg-aks-\<resourceLabel>       | Kubernetes Service (AKS)    |

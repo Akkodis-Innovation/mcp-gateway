@@ -113,8 +113,10 @@ data:
   AzureAd__ClientId: "${CLIENT_ID}"
   AzureAd__Audience: "${CLIENT_ID}"
 
-  CosmosSettings__AccountEndpoint: "https://mg-storage-${IDENTIFIER}.documents.azure.com:443/"
-  CosmosSettings__DatabaseName: "McpGatewayDb"
+  MongoSettings__ConnectionString: "mongodb://mg-storage-${IDENTIFIER}.mongo.cosmos.azure.com:10255/?ssl=true&replicaSet=globaldb"
+  MongoSettings__DatabaseName: "McpGatewayDb"
+  MongoSettings__AdapterCollectionName: "adapters"
+  MongoSettings__ToolCollectionName: "tools"
 
   ApplicationInsights__ConnectionString: "${APPINSIGHTS_CONNECTION_STRING}"
 

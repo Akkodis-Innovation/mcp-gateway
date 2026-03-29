@@ -49,7 +49,7 @@ Use the PowerShell deployment script for better control and separation of concer
 | `ClientId` | Yes | Entra ID client ID for authentication |
 | `ResourceLabel` | No | Alphanumeric suffix for resource naming (3-30 chars). Defaults to resource group name |
 | `Location` | No | Azure region for deployment. Default: `westus3` |
-| `EnablePrivateEndpoints` | No | Switch to enable private endpoints for ACR and Cosmos DB |
+| `EnablePrivateEndpoints` | No | Switch to enable private endpoints for ACR and DocumentDB |
 
 ### Option 2: Direct Bicep Deployment (Legacy)
 
@@ -107,9 +107,9 @@ The deployment creates the following Azure resources:
   - Standard SKU
   - Integrated with AKS for image pull
 
-- **Azure Cosmos DB**: Document database for gateway state
-  - Session consistency level
-  - Three containers: AdapterContainer, CacheContainer, ToolContainer
+- **Azure DocumentDB (MongoDB API)**: Document database for gateway state
+  - Mongo-compatible API
+  - Collections for adapters and tools
   - Optional private endpoint support
 
 ### Networking
@@ -128,7 +128,7 @@ The deployment creates the following Azure resources:
 
 ### Identity & Access
 - **Managed Identities**:
-  - Gateway service identity (with Cosmos DB data contributor role)
+  - Gateway service identity (with DocumentDB data access role)
   - Admin identity (for AKS operations)
   - Workload identity (for pod-level authentication)
   
@@ -144,7 +144,7 @@ Resources are accessible over the internet with proper authentication.
 
 ### Private Endpoints
 Enable with `-EnablePrivateEndpoints` flag:
-- ACR and Cosmos DB accessible only within VNet
+- ACR and DocumentDB accessible only within VNet
 - Private DNS zones automatically configured
 - Ideal for production environments requiring network isolation
 
@@ -247,7 +247,7 @@ If you previously deployed using the embedded Bicep deployment script:
         │
 ┌───────▼────────┐              ┌─────────────────┐
 │                │              │                 │
-│  Cosmos DB     │              │  App Insights   │
+│  DocumentDB    │              │  App Insights   │
 │  (State)       │              │  (Monitoring)   │
 └────────────────┘              └─────────────────┘
 ```
@@ -255,7 +255,7 @@ If you previously deployed using the embedded Bicep deployment script:
 ## Security Considerations
 
 - **Authentication**: Uses Entra ID (Azure AD) for authentication
-- **Authorization**: Azure RBAC for AKS, Cosmos DB RBAC for data access
+- **Authorization**: Azure RBAC for AKS, DocumentDB RBAC for data access
 - **Network Isolation**: Optional private endpoints for enhanced security
 - **Identity**: Workload Identity for pod-level authentication (no secrets needed)
 - **Secrets**: Managed identities eliminate need for storing credentials
@@ -264,5 +264,5 @@ If you previously deployed using the embedded Bicep deployment script:
 
 - [Azure Kubernetes Service Documentation](https://docs.microsoft.com/azure/aks/)
 - [Azure Container Registry Documentation](https://docs.microsoft.com/azure/container-registry/)
-- [Azure Cosmos DB Documentation](https://docs.microsoft.com/azure/cosmos-db/)
+- [Azure Cosmos DB for MongoDB Documentation](https://learn.microsoft.com/azure/cosmos-db/mongodb/)
 - [Bicep Documentation](https://docs.microsoft.com/azure/azure-resource-manager/bicep/)
