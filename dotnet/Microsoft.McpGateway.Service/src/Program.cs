@@ -24,12 +24,7 @@ builder.Services.AddSingleton<IAdapterSessionStore, DistributedMemorySessionStor
 builder.Services.AddSingleton<IServiceNodeInfoProvider, AdapterKubernetesNodeInfoProvider>();
 builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandler>();
 
-var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
-builder.Services.AddStackExchangeRedisCache(options =>
-{
-    options.Configuration = redisConnection;
-    options.InstanceName = "mcpgateway:";
-});
+builder.Services.AddDistributedMemoryCache();
 
 var mongoConfig = builder.Configuration.GetSection("MongoSettings");
 var mongoConnectionString = mongoConfig["ConnectionString"] ?? "mongodb://localhost:27017";
