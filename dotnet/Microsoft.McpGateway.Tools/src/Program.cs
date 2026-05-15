@@ -40,6 +40,7 @@ if (builder.Environment.IsDevelopment())
 }
 
 // Register IToolDefinitionProvider using the store
+builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IToolDefinitionProvider, StorageToolDefinitionProvider>();
 
 // Register tool executor
@@ -65,6 +66,28 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 var app = builder.Build();
+
+var gatewaySecret = app.Configuration.GetValue<string>("GatewaySettings:Secret");
+if (string.IsNullOrEmpty(gatewaySecret) && !app.Environment.IsDevelopment())
+{
+    throw new InvalidOperationException("GatewaySettings:Secret must be configured in non-development environments.");
+}
+
+// Validate the shared gateway secret on every request
+app.Use(async (context, next) =>
+{
+    if (!string.IsNullOrEmpty(gatewaySecret))
+    {
+        if (!context.Request.Headers.TryGetValue(ForwardedIdentityHeaders.GatewaySecret, out var requestSecret) ||
+            !string.Equals(gatewaySecret, requestSecret.ToString(), StringComparison.Ordinal))
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+    }
+
+    await next().ConfigureAwait(false);
+});
 
 app.Use(async (context, next) =>
 {
