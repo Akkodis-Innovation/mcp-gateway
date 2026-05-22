@@ -36,3 +36,27 @@ Follow these steps to enable application roles, assign them to identities, and p
   - **Write** access if the caller is the creator or holds `mcp.admin`.
 
   > If no `requiredRoles` is configured, it by default ALLOW ALL READ access.
+
+---
+
+## Registered Roles
+
+The following roles are currently defined on the `McpGateway` app registration.
+
+| Role value | Display name | Purpose |
+|------------|--------------|---------|
+| `mcp.admin` | Admin | Full read/write access to all adapters and tools. Always required. |
+| `mcp.entities.user` | Entities User | Access to the `aims-entities` adapter — allows agents and users to search, read, create, update, and manage AIMS entity relationships via MCP. |
+
+### `mcp.entities.user` — setup checklist
+
+1. **Create the role** on the `McpGateway` app registration (see step 1 above).
+   - Display name: `Entities User`
+   - Value: `mcp.entities.user`
+   - Allowed member types: `Users/Groups` and `Applications`
+
+2. **Assign to users** who should be permitted to call the `aims-entities` adapter through an MCP client (e.g. VS Code Copilot, Claude Desktop).
+
+3. **Assign to the `entities-mcp` service principal** (the app registration used by the `entities-mcp` server to call the AIMS WebAPI) so it can authenticate to the gateway management API if needed.
+
+4. **Register the adapter** with `requiredRoles: ["mcp.entities.user"]` (see [entities-mcp-server-plan.md](../../AIMS-Tools/plans/entities-mcp-server-plan.md) for the full registration payload).
