@@ -47,6 +47,7 @@ The following roles are currently defined on the `McpGateway` app registration.
 |------------|--------------|---------|
 | `mcp.admin` | Admin | Full read/write access to all adapters and tools. Always required. |
 | `mcp.entities.user` | Entities User | Access to the `aims-entities` adapter — allows agents and users to search, read, create, update, and manage AIMS entity relationships via MCP. |
+| `mcp.platform.admin` | Platform Admin | Access to the `aims-platform` adapter — allows agents and administrators to read and manage AIMS platform configuration (modules, cards, forms, configuration JSON) via MCP. Publish/save operations require an explicit `confirm=true` in the tool call. |
 
 ### `mcp.entities.user` — setup checklist
 
@@ -58,5 +59,20 @@ The following roles are currently defined on the `McpGateway` app registration.
 2. **Assign to users** who should be permitted to call the `aims-entities` adapter through an MCP client (e.g. VS Code Copilot, Claude Desktop).
 
 3. **Assign to the `entities-mcp` service principal** (the app registration used by the `entities-mcp` server to call the AIMS WebAPI) so it can authenticate to the gateway management API if needed.
+
+---
+
+### `mcp.platform.admin` — setup checklist
+
+1. **Create the role** on the `McpGateway` app registration (see step 1 above).
+   - Display name: `Platform Admin`
+   - Value: `mcp.platform.admin`
+   - Allowed member types: `Users/Groups` and `Applications`
+
+2. **Assign to users** who should be permitted to call the `aims-platform` adapter through an MCP client. This role grants access to mutate platform-wide configuration so should be granted sparingly.
+
+3. **Assign to the `platform-mcp` service principal** (the app registration used by the `platform-mcp` server to call the AIMS WebAPI) if it also needs to call the gateway management API.
+
+4. **Register the adapter** on the gateway using `requiredRoles: ["mcp.platform.admin"]`. See `AIMS-Tools/platform-mcp/README.md` for the full registration payload.
 
 4. **Register the adapter** with `requiredRoles: ["mcp.entities.user"]` (see [entities-mcp-server-plan.md](../../AIMS-Tools/plans/entities-mcp-server-plan.md) for the full registration payload).
