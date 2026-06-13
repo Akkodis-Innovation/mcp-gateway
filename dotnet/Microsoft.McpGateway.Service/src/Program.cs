@@ -193,7 +193,13 @@ builder.WebHost.ConfigureKestrel(options =>
     options.ListenAnyIP(8000);
 });
 
+var temp = builder.Configuration.GetSection("AzureAd");
+
 var app = builder.Build();
+
+var logger = app.Logger;
+var audience = temp["Audience"];
+logger.LogInformation("JWT Bearer Audience: {Audience}", audience);
 
 // Serve the management portal SPA out of wwwroot/portal. Static files are
 // mapped before authentication so the HTML shell, JS bundle and runtime
