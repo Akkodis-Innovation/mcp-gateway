@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
-using Microsoft.McpGateway.Management.Foundry;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Authentication;
@@ -81,9 +80,6 @@ if (builder.Environment.IsDevelopment())
         builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
     }
 
-    builder.Services.AddSingleton<IAgentResourceStore, InMemoryAgentResourceStore>();
-    builder.Services.AddSingleton<ISessionResourceStore, InMemorySessionResourceStore>();
-
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
 }
@@ -134,8 +130,6 @@ else
         return new MongoToolResourceStore(sp.GetRequiredService<IMongoDatabase>(), toolCollectionName, logger);
     });
 
-    builder.Services.AddSingleton<IAgentResourceStore, InMemoryAgentResourceStore>();
-    builder.Services.AddSingleton<ISessionResourceStore, InMemorySessionResourceStore>();
 }
 
 builder.Services.AddSingleton<IKubeClientWrapper>(c =>
@@ -151,24 +145,7 @@ builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
 });
 builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();
-builder.Services.AddSingleton<IAgentManagementService, AgentManagementService>();
-builder.Services.AddSingleton<ISessionManagementService, SessionManagementService>();
 builder.Services.AddSingleton<IAdapterRichResultProvider, AdapterRichResultProvider>();
-
-// Foundry chat client. Only registered when an endpoint is configured so that
-// dev / unit-test environments can run without it; SessionManagementService
-// gracefully leaves sessions in Pending when no client is wired up.
-var foundrySection = builder.Configuration.GetSection("FoundrySettings");
-if (!string.IsNullOrWhiteSpace(foundrySection["Endpoint"]))
-{
-    builder.Services.Configure<FoundrySettings>(foundrySection);
-    builder.Services.AddSingleton<IFoundryChatClient, FoundryChatClient>();
-    builder.Services.AddSingleton<BuiltinToolExecutor>();
-    builder.Services.AddSingleton<AgentToolRegistry>();
-    builder.Services.AddSingleton<AgentRunner>();
-    builder.Services.AddSingleton<Func<AgentRunner>>(sp => () => sp.GetRequiredService<AgentRunner>());
-    builder.Services.AddSingleton<SubAgentInvoker>();
-}
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
