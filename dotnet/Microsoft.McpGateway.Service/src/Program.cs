@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
+using Microsoft.McpGateway.Management.Foundry;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Authentication;
@@ -24,59 +25,117 @@ builder.Services.AddSingleton<IAdapterSessionStore, DistributedMemorySessionStor
 builder.Services.AddSingleton<IServiceNodeInfoProvider, AdapterKubernetesNodeInfoProvider>();
 builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandler>();
 
-builder.Services.AddDistributedMemoryCache();
+// Operators can opt out of Entra ID and run the gateway with the dev auth
+// handler (X-Dev-* headers) by setting `Authentication__BypassEntra=true`
+// in the pod's environment. This is intended for restricted demo / e2e
+// clusters that aren't reachable from the public internet. Always-on in
+// Development as before.
+var bypassEntra = builder.Configuration.GetValue<bool>("Authentication:BypassEntra");
+var useDevAuth = builder.Environment.IsDevelopment() || bypassEntra;
 
-var mongoConfig = builder.Configuration.GetSection("MongoSettings");
-var mongoConnectionString = mongoConfig["ConnectionString"] ?? "mongodb://localhost:27017";
-var mongoDatabaseName = mongoConfig["DatabaseName"] ?? "McpGatewayDb";
-var adapterCollectionName = mongoConfig["AdapterCollectionName"] ?? "adapters";
-var toolCollectionName = mongoConfig["ToolCollectionName"] ?? "tools";
-
-builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoConnectionString));
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoDatabaseName));
-
-builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
+if (useDevAuth)
 {
-    var logger = sp.GetRequiredService<ILogger<MongoAdapterResourceStore>>();
-    return new MongoAdapterResourceStore(sp.GetRequiredService<IMongoDatabase>(), adapterCollectionName, logger);
-});
+    if (bypassEntra && !builder.Environment.IsDevelopment())
+    {
+        Console.WriteLine("[auth] Authentication:BypassEntra=true; using Development auth scheme (X-Dev-* headers). Do NOT enable this on internet-facing deployments.");
+    }
 
-builder.Services.AddSingleton<IToolResourceStore>(sp =>
-{
-    var logger = sp.GetRequiredService<ILogger<MongoToolResourceStore>>();
-    return new MongoToolResourceStore(sp.GetRequiredService<IMongoDatabase>(), toolCollectionName, logger);
-});
-
-if (builder.Environment.IsDevelopment())
-{
     builder.Services
         .AddAuthentication(DevelopmentAuthenticationHandler.SchemeName)
         .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(DevelopmentAuthenticationHandler.SchemeName, null);
+}
+
+if (builder.Environment.IsDevelopment())
+{
+
+    // The shipped appsettings.Development.json points Redis at the in-cluster
+    // `redis-service` hostname so the same image works inside the local
+    // kind/k3s deployment, but a vanilla `dotnet run` on a laptop has no
+    // Redis. Probe the configured endpoint with a short timeout: if it's
+    // reachable, use the Redis-backed stores; otherwise transparently fall
+    // back to in-memory so the gateway and management portal still work.
+    //
+    // The probe only runs in Development; production / cloud always uses
+    // Cosmos and never goes through this branch.
+    var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
+    var useInMemoryStoresSetting = builder.Configuration.GetValue<bool?>("Storage:UseInMemoryStores");
+    var useInMemoryStores = useInMemoryStoresSetting ?? !TryProbeRedis(redisConnection);
+
+    if (useInMemoryStores)
+    {
+        Console.WriteLine($"[dev] Redis at '{redisConnection}' unavailable or disabled; using in-memory stores.");
+        builder.Services.AddDistributedMemoryCache();
+        builder.Services.AddSingleton<IAdapterResourceStore, InMemoryAdapterResourceStore>();
+        builder.Services.AddSingleton<IToolResourceStore, InMemoryToolResourceStore>();
+    }
+    else
+    {
+        Console.WriteLine($"[dev] Using Redis at '{redisConnection}' for adapter/tool stores.");
+        builder.Services.AddStackExchangeRedisCache(options =>
+        {
+            options.Configuration = redisConnection;
+            options.InstanceName = "mcpgateway:";
+        });
+
+        builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
+        builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+    }
+
+    builder.Services.AddSingleton<IAgentResourceStore, InMemoryAgentResourceStore>();
+    builder.Services.AddSingleton<ISessionResourceStore, InMemorySessionResourceStore>();
 
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
 }
 else
 {
-    var azureAdConfig = builder.Configuration.GetSection("AzureAd");
-    builder.Services.AddAuthentication(options =>
+    if (!useDevAuth)
     {
-        options.DefaultChallengeScheme = McpAuthenticationDefaults.AuthenticationScheme;
-        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    })
-    .AddScheme<McpAuthenticationOptions, McpSubPathAwareAuthenticationHandler>(
-        McpAuthenticationDefaults.AuthenticationScheme,
-        McpAuthenticationDefaults.DisplayName,
-    options =>
-    {
-        options.ResourceMetadata = new()
+        var azureAdConfig = builder.Configuration.GetSection("AzureAd");
+        builder.Services.AddAuthentication(options =>
         {
-            Resource = new Uri(azureAdConfig["Audience"]!),
-            AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
-            ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
-        };
-    })
-    .AddMicrosoftIdentityWebApi(azureAdConfig);
+            options.DefaultChallengeScheme = McpAuthenticationDefaults.AuthenticationScheme;
+            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        })
+        .AddScheme<McpAuthenticationOptions, McpSubPathAwareAuthenticationHandler>(
+            McpAuthenticationDefaults.AuthenticationScheme,
+            McpAuthenticationDefaults.DisplayName,
+        options =>
+        {
+            options.ResourceMetadata = new()
+            {
+                Resource = new Uri(builder.Configuration.GetValue<string>("PublicOrigin")!),
+                AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
+                ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
+            };
+        })
+        .AddMicrosoftIdentityWebApi(azureAdConfig);
+    }
+
+    var mongoConfig = builder.Configuration.GetSection("MongoSettings");
+    var mongoConnectionString = mongoConfig["ConnectionString"] ?? "mongodb://localhost:27017";
+    var mongoDatabaseName = mongoConfig["DatabaseName"] ?? "McpGatewayDb";
+    var adapterCollectionName = mongoConfig["AdapterCollectionName"] ?? "adapters";
+    var toolCollectionName = mongoConfig["ToolCollectionName"] ?? "tools";
+
+    builder.Services.AddDistributedMemoryCache();
+    builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoConnectionString));
+    builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoDatabaseName));
+
+    builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<MongoAdapterResourceStore>>();
+        return new MongoAdapterResourceStore(sp.GetRequiredService<IMongoDatabase>(), adapterCollectionName, logger);
+    });
+
+    builder.Services.AddSingleton<IToolResourceStore>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<MongoToolResourceStore>>();
+        return new MongoToolResourceStore(sp.GetRequiredService<IMongoDatabase>(), toolCollectionName, logger);
+    });
+
+    builder.Services.AddSingleton<IAgentResourceStore, InMemoryAgentResourceStore>();
+    builder.Services.AddSingleton<ISessionResourceStore, InMemorySessionResourceStore>();
 }
 
 builder.Services.AddSingleton<IKubeClientWrapper>(c =>
@@ -92,7 +151,24 @@ builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
 });
 builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();
+builder.Services.AddSingleton<IAgentManagementService, AgentManagementService>();
+builder.Services.AddSingleton<ISessionManagementService, SessionManagementService>();
 builder.Services.AddSingleton<IAdapterRichResultProvider, AdapterRichResultProvider>();
+
+// Foundry chat client. Only registered when an endpoint is configured so that
+// dev / unit-test environments can run without it; SessionManagementService
+// gracefully leaves sessions in Pending when no client is wired up.
+var foundrySection = builder.Configuration.GetSection("FoundrySettings");
+if (!string.IsNullOrWhiteSpace(foundrySection["Endpoint"]))
+{
+    builder.Services.Configure<FoundrySettings>(foundrySection);
+    builder.Services.AddSingleton<IFoundryChatClient, FoundryChatClient>();
+    builder.Services.AddSingleton<BuiltinToolExecutor>();
+    builder.Services.AddSingleton<AgentToolRegistry>();
+    builder.Services.AddSingleton<AgentRunner>();
+    builder.Services.AddSingleton<Func<AgentRunner>>(sp => () => sp.GetRequiredService<AgentRunner>());
+    builder.Services.AddSingleton<SubAgentInvoker>();
+}
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
@@ -105,47 +181,52 @@ builder.WebHost.ConfigureKestrel(options =>
 
 var app = builder.Build();
 
-// OAuth proxy endpoints so VS Code can use the gateway URL as the authorization server.
-var tenantId = app.Configuration["AzureAd:TenantId"]!;
-var clientId = app.Configuration["AzureAd:ClientId"]!;
-var publicOrigin = app.Configuration["PublicOrigin"]!;
-
-// OIDC discovery — VS Code fetches this to find authorize + token endpoints
-app.MapGet("/.well-known/openid-configuration", () => Results.Json(new
-{
-    issuer = publicOrigin,
-    authorization_endpoint = $"{publicOrigin}/authorize",
-    token_endpoint = $"{publicOrigin}/token",
-    response_types_supported = new[] { "code" },
-    code_challenge_methods_supported = new[] { "S256" },
-    grant_types_supported = new[] { "authorization_code" },
-})).AllowAnonymous();
-
-app.MapGet("/authorize", (HttpRequest request) =>
-{
-    var qs = request.QueryString.Value ?? "";
-    return Results.Redirect(
-        $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize{qs}",
-        permanent: false);
-}).AllowAnonymous();
-
-app.MapPost("/token", async (HttpRequest request, IHttpClientFactory clientFactory) =>
-{
-    var form = await request.ReadFormAsync();
-    var params_ = form.ToDictionary(kv => kv.Key, kv => kv.Value.ToString());
-    // Inject scope if missing — Entra v2 requires it
-    if (!params_.ContainsKey("scope") || string.IsNullOrEmpty(params_["scope"]))
-        params_["scope"] = $"api://{clientId}/.default";
-    var client = clientFactory.CreateClient();
-    var resp = await client.PostAsync(
-        $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token",
-        new FormUrlEncodedContent(params_));
-    var body = await resp.Content.ReadAsStringAsync();
-    return Results.Content(body, "application/json", statusCode: (int)resp.StatusCode);
-}).AllowAnonymous();
+// Serve the management portal SPA out of wwwroot/portal. Static files are
+// mapped before authentication so the HTML shell, JS bundle and runtime
+// config endpoint are reachable anonymously; the SPA acquires its own
+// access token via MSAL once it loads.
+app.UseStaticFiles();
 
 // Configure the HTTP request pipeline.
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Land users on the portal when they visit the gateway in a browser. The
+// redirect is attributed AllowAnonymous so the unauthenticated case still
+// reaches the SPA shell instead of the 401 challenge handler.
+app.MapGet("/", () => Results.Redirect("/portal/", permanent: false))
+    .AllowAnonymous();
+
 app.MapControllers();
+
+// Any /portal/* path that didn't match a physical file or controller route
+// is treated as a SPA route and served the portal shell. The `nonfile`
+// constraint keeps requests for hashed asset bundles flowing through the
+// static-file middleware instead. Constrained to /portal/* so requests like
+// `GET /adapters/foo` continue to hit the API controllers untouched.
+app.MapFallbackToFile("/portal", "portal/index.html").AllowAnonymous();
+app.MapFallbackToFile("/portal/{*path:nonfile}", "portal/index.html")
+    .AllowAnonymous();
 await app.RunAsync();
+
+// Best-effort check that a configured Redis is reachable. Only used by the
+// Development-mode store registration above so a developer running
+// `dotnet run` on a laptop transparently falls back to in-memory stores
+// instead of failing every /adapters and /tools call with a Redis timeout.
+static bool TryProbeRedis(string connectionString)
+{
+    try
+    {
+        var options = StackExchange.Redis.ConfigurationOptions.Parse(connectionString);
+        options.AbortOnConnectFail = false;
+        options.ConnectTimeout = 2000;
+        options.SyncTimeout = 2000;
+        options.ConnectRetry = 1;
+        using var muxer = StackExchange.Redis.ConnectionMultiplexer.Connect(options);
+        return muxer.IsConnected;
+    }
+    catch
+    {
+        return false;
+    }
+}
