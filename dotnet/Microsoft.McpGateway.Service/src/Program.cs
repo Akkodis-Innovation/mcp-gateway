@@ -104,11 +104,12 @@ else
             McpAuthenticationDefaults.DisplayName,
         options =>
         {
+            var publicOrigin = builder.Configuration.GetValue<string>("PublicOrigin")!.TrimEnd('/');
             options.ResourceMetadata = new()
             {
-                Resource = new Uri(builder.Configuration.GetValue<string>("PublicOrigin")!),
+                Resource = new Uri(publicOrigin),
                 AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
-                ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
+                ScopesSupported = [$"{publicOrigin}/.default"]
             };
         })
         .AddMicrosoftIdentityWebApi(azureAdConfig);
