@@ -106,9 +106,20 @@ builder.WebHost.ConfigureKestrel(options =>
 var app = builder.Build();
 
 // OAuth proxy endpoints so VS Code can use the gateway URL as the authorization server.
-// VS Code constructs {server}/authorize and {server}/token from the MCP server URL
-// when doing the manual client registration flow.
 var tenantId = app.Configuration["AzureAd:TenantId"]!;
+var clientId = app.Configuration["AzureAd:ClientId"]!;
+var publicOrigin = app.Configuration["PublicOrigin"]!;
+
+// OIDC discovery — VS Code fetches this to find authorize + token endpoints
+app.MapGet("/.well-known/openid-configuration", () => Results.Json(new
+{
+    issuer = publicOrigin,
+    authorization_endpoint = $"{publicOrigin}/authorize",
+    token_endpoint = $"{publicOrigin}/token",
+    response_types_supported = new[] { "code" },
+    code_challenge_methods_supported = new[] { "S256" },
+    grant_types_supported = new[] { "authorization_code" },
+})).AllowAnonymous();
 
 app.MapGet("/authorize", (HttpRequest request) =>
 {
@@ -121,7 +132,6 @@ app.MapGet("/authorize", (HttpRequest request) =>
 app.MapPost("/token", async (HttpRequest request, IHttpClientFactory clientFactory) =>
 {
     var form = await request.ReadFormAsync();
-    var clientId = app.Configuration["AzureAd:ClientId"]!;
     var params_ = form.ToDictionary(kv => kv.Key, kv => kv.Value.ToString());
     // Inject scope if missing — Entra v2 requires it
     if (!params_.ContainsKey("scope") || string.IsNullOrEmpty(params_["scope"]))
