@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <PackageReference Include="KubernetesClient" />
+    <PackageReference Include="Microsoft.Azure.Cosmos" />
     <PackageReference Include="MongoDB.Driver" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />

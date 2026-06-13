@@ -4,9 +4,8 @@
 using Azure.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.Azure.Cosmos;
-using Microsoft.Azure.Cosmos.Fluent;
 using Microsoft.Identity.Web;
+using MongoDB.Driver;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Foundry;
@@ -16,8 +15,6 @@ using Microsoft.McpGateway.Service.Authentication;
 using Microsoft.McpGateway.Service.Routing;
 using Microsoft.McpGateway.Service.Session;
 using ModelContextProtocol.AspNetCore.Authentication;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 var credential = new DefaultAzureCredential();
@@ -117,49 +114,40 @@ else
         .AddMicrosoftIdentityWebApi(azureAdConfig);
     }
 
-    // Create CosmosClient with credential-based authentication
-    var cosmosConfig = builder.Configuration.GetSection("CosmosSettings");
-    var cosmosClient = new CosmosClient(
-        cosmosConfig["AccountEndpoint"], 
-        credential, 
-        new CosmosClientOptions
-        {
-            Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
-            {
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-            })
-        });
+    var mongoConfig = builder.Configuration.GetSection("MongoSettings");
+    var mongoConnectionString = mongoConfig["ConnectionString"] ?? "mongodb://localhost:27017";
+    var mongoDatabaseName = mongoConfig["DatabaseName"] ?? "McpGatewayDb";
+    var adapterCollectionName = mongoConfig["AdapterCollectionName"] ?? "adapters";
+    var toolCollectionName = mongoConfig["ToolCollectionName"] ?? "tools";
+    var agentCollectionName = mongoConfig["AgentCollectionName"] ?? "agents";
+    var sessionCollectionName = mongoConfig["SessionCollectionName"] ?? "sessions";
+
+    builder.Services.AddDistributedMemoryCache();
+    builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoConnectionString));
+    builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoDatabaseName));
 
     builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
     {
-        var logger = sp.GetRequiredService<ILogger<CosmosAdapterResourceStore>>();
-        return new CosmosAdapterResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AdapterContainer", logger);
+        var logger = sp.GetRequiredService<ILogger<MongoAdapterResourceStore>>();
+        return new MongoAdapterResourceStore(sp.GetRequiredService<IMongoDatabase>(), adapterCollectionName, logger);
     });
 
     builder.Services.AddSingleton<IToolResourceStore>(sp =>
     {
-        var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
-        return new CosmosToolResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "ToolContainer", logger);
+        var logger = sp.GetRequiredService<ILogger<MongoToolResourceStore>>();
+        return new MongoToolResourceStore(sp.GetRequiredService<IMongoDatabase>(), toolCollectionName, logger);
     });
 
     builder.Services.AddSingleton<IAgentResourceStore>(sp =>
     {
-        var logger = sp.GetRequiredService<ILogger<CosmosAgentResourceStore>>();
-        return new CosmosAgentResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AgentContainer", logger);
+        var logger = sp.GetRequiredService<ILogger<MongoAgentResourceStore>>();
+        return new MongoAgentResourceStore(sp.GetRequiredService<IMongoDatabase>(), agentCollectionName, logger);
     });
 
     builder.Services.AddSingleton<ISessionResourceStore>(sp =>
     {
-        var logger = sp.GetRequiredService<ILogger<CosmosSessionResourceStore>>();
-        return new CosmosSessionResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "SessionContainer", logger);
-    });
-    
-    builder.Services.AddCosmosCache(options =>
-    {
-        options.ContainerName = "CacheContainer";
-        options.DatabaseName = cosmosConfig["DatabaseName"]!;
-        options.CreateIfNotExists = true;
-        options.ClientBuilder = new CosmosClientBuilder(cosmosConfig["AccountEndpoint"], credential);
+        var logger = sp.GetRequiredService<ILogger<MongoSessionResourceStore>>();
+        return new MongoSessionResourceStore(sp.GetRequiredService<IMongoDatabase>(), sessionCollectionName, logger);
     });
 }
 
