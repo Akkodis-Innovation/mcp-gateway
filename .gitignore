@@ -399,5 +399,8 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 
-# ignore plans folder
-plans/
+# MCP Gateway portal (built SPA assets)
+dotnet/Microsoft.McpGateway.Service/src/wwwroot/portal/
+portal/dist/
+portal/node_modules/
+portal/*.tsbuildinfo
