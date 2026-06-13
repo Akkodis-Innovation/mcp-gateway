@@ -105,6 +105,31 @@ builder.WebHost.ConfigureKestrel(options =>
 
 var app = builder.Build();
 
+// OAuth proxy endpoints so VS Code can use the gateway URL as the authorization server.
+// VS Code constructs {server}/authorize and {server}/token from the MCP server URL
+// when doing the manual client registration flow.
+var tenantId = app.Configuration["AzureAd:TenantId"]!;
+
+app.MapGet("/authorize", (HttpRequest request) =>
+{
+    var qs = request.QueryString.Value ?? "";
+    return Results.Redirect(
+        $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize{qs}",
+        permanent: false);
+}).AllowAnonymous();
+
+app.MapPost("/token", async (HttpRequest request, IHttpClientFactory clientFactory) =>
+{
+    var form = await request.ReadFormAsync();
+    var client = clientFactory.CreateClient();
+    var resp = await client.PostAsync(
+        $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token",
+        new FormUrlEncodedContent(form.Select(kv =>
+            new KeyValuePair<string, string>(kv.Key, kv.Value.ToString()))));
+    var body = await resp.Content.ReadAsStringAsync();
+    return Results.Content(body, "application/json", statusCode: (int)resp.StatusCode);
+}).AllowAnonymous();
+
 // Configure the HTTP request pipeline.
 app.UseAuthentication();
 app.UseAuthorization();
