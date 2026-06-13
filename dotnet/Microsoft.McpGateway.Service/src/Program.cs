@@ -1,20 +1,26 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using Azure.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Azure.Cosmos;
+using Microsoft.Azure.Cosmos.Fluent;
 using Microsoft.Identity.Web;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
+using Microsoft.McpGateway.Management.Foundry;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Authentication;
 using Microsoft.McpGateway.Service.Routing;
 using Microsoft.McpGateway.Service.Session;
 using ModelContextProtocol.AspNetCore.Authentication;
-using MongoDB.Driver;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
+var credential = new DefaultAzureCredential();
 
 builder.Services.AddApplicationInsightsTelemetry();
 builder.Services.AddLogging();
@@ -80,6 +86,9 @@ if (builder.Environment.IsDevelopment())
         builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
     }
 
+    builder.Services.AddSingleton<IAgentResourceStore, InMemoryAgentResourceStore>();
+    builder.Services.AddSingleton<ISessionResourceStore, InMemorySessionResourceStore>();
+
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
 }
@@ -100,7 +109,7 @@ else
         {
             options.ResourceMetadata = new()
             {
-                Resource = new Uri(azureAdConfig["Audience"]!),
+                Resource = new Uri(builder.Configuration.GetValue<string>("PublicOrigin")!),
                 AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
                 ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
             };
@@ -108,28 +117,50 @@ else
         .AddMicrosoftIdentityWebApi(azureAdConfig);
     }
 
-    var mongoConfig = builder.Configuration.GetSection("MongoSettings");
-    var mongoConnectionString = mongoConfig["ConnectionString"] ?? "mongodb://localhost:27017";
-    var mongoDatabaseName = mongoConfig["DatabaseName"] ?? "McpGatewayDb";
-    var adapterCollectionName = mongoConfig["AdapterCollectionName"] ?? "adapters";
-    var toolCollectionName = mongoConfig["ToolCollectionName"] ?? "tools";
-
-    builder.Services.AddDistributedMemoryCache();
-    builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoConnectionString));
-    builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoDatabaseName));
+    // Create CosmosClient with credential-based authentication
+    var cosmosConfig = builder.Configuration.GetSection("CosmosSettings");
+    var cosmosClient = new CosmosClient(
+        cosmosConfig["AccountEndpoint"], 
+        credential, 
+        new CosmosClientOptions
+        {
+            Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            })
+        });
 
     builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
     {
-        var logger = sp.GetRequiredService<ILogger<MongoAdapterResourceStore>>();
-        return new MongoAdapterResourceStore(sp.GetRequiredService<IMongoDatabase>(), adapterCollectionName, logger);
+        var logger = sp.GetRequiredService<ILogger<CosmosAdapterResourceStore>>();
+        return new CosmosAdapterResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AdapterContainer", logger);
     });
 
     builder.Services.AddSingleton<IToolResourceStore>(sp =>
     {
-        var logger = sp.GetRequiredService<ILogger<MongoToolResourceStore>>();
-        return new MongoToolResourceStore(sp.GetRequiredService<IMongoDatabase>(), toolCollectionName, logger);
+        var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
+        return new CosmosToolResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "ToolContainer", logger);
     });
 
+    builder.Services.AddSingleton<IAgentResourceStore>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<CosmosAgentResourceStore>>();
+        return new CosmosAgentResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AgentContainer", logger);
+    });
+
+    builder.Services.AddSingleton<ISessionResourceStore>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<CosmosSessionResourceStore>>();
+        return new CosmosSessionResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "SessionContainer", logger);
+    });
+    
+    builder.Services.AddCosmosCache(options =>
+    {
+        options.ContainerName = "CacheContainer";
+        options.DatabaseName = cosmosConfig["DatabaseName"]!;
+        options.CreateIfNotExists = true;
+        options.ClientBuilder = new CosmosClientBuilder(cosmosConfig["AccountEndpoint"], credential);
+    });
 }
 
 builder.Services.AddSingleton<IKubeClientWrapper>(c =>
@@ -145,7 +176,25 @@ builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
 });
 builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();
+builder.Services.AddSingleton<IAgentManagementService, AgentManagementService>();
+builder.Services.AddSingleton<ISessionManagementService, SessionManagementService>();
 builder.Services.AddSingleton<IAdapterRichResultProvider, AdapterRichResultProvider>();
+
+// Foundry chat client. Only registered when an endpoint is configured so that
+// dev / unit-test environments can run without it; SessionManagementService
+// gracefully leaves sessions in Pending when no client is wired up.
+var foundrySection = builder.Configuration.GetSection("FoundrySettings");
+if (!string.IsNullOrWhiteSpace(foundrySection["Endpoint"]))
+{
+    builder.Services.Configure<FoundrySettings>(foundrySection);
+    builder.Services.AddSingleton<Azure.Core.TokenCredential>(credential);
+    builder.Services.AddSingleton<IFoundryChatClient, FoundryChatClient>();
+    builder.Services.AddSingleton<BuiltinToolExecutor>();
+    builder.Services.AddSingleton<AgentToolRegistry>();
+    builder.Services.AddSingleton<AgentRunner>();
+    builder.Services.AddSingleton<Func<AgentRunner>>(sp => () => sp.GetRequiredService<AgentRunner>());
+    builder.Services.AddSingleton<SubAgentInvoker>();
+}
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
