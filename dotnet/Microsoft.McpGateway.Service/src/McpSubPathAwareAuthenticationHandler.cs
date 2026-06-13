@@ -162,7 +162,10 @@ public class McpSubPathAwareAuthenticationHandler : AuthenticationHandler<McpAut
 
         return new ProtectedResourceMetadata
         {
-            Resource = new Uri(resourceMetadata.Resource, subPath),
+            // Keep Resource as the root identifier URI (not the adapter sub-path).
+            // Entra performs exact identifierUri matching on the resource indicator —
+            // sub-path URIs are not recognised and cause AADSTS9010010.
+            Resource = resourceMetadata.Resource,
             AuthorizationServers = [.. resourceMetadata.AuthorizationServers],
             BearerMethodsSupported = [.. resourceMetadata.BearerMethodsSupported],
             ScopesSupported = [.. resourceMetadata.ScopesSupported],
