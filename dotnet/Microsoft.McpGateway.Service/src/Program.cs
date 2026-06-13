@@ -121,11 +121,15 @@ app.MapGet("/authorize", (HttpRequest request) =>
 app.MapPost("/token", async (HttpRequest request, IHttpClientFactory clientFactory) =>
 {
     var form = await request.ReadFormAsync();
+    var clientId = app.Configuration["AzureAd:ClientId"]!;
+    var params_ = form.ToDictionary(kv => kv.Key, kv => kv.Value.ToString());
+    // Inject scope if missing — Entra v2 requires it
+    if (!params_.ContainsKey("scope") || string.IsNullOrEmpty(params_["scope"]))
+        params_["scope"] = $"api://{clientId}/.default";
     var client = clientFactory.CreateClient();
     var resp = await client.PostAsync(
         $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token",
-        new FormUrlEncodedContent(form.Select(kv =>
-            new KeyValuePair<string, string>(kv.Key, kv.Value.ToString()))));
+        new FormUrlEncodedContent(params_));
     var body = await resp.Content.ReadAsStringAsync();
     return Results.Content(body, "application/json", statusCode: (int)resp.StatusCode);
 }).AllowAnonymous();
